@@ -1,0 +1,5 @@
+{
+  "name": "Chronicle: Infinite Adventure",
+  "description": "An AI-powered choose-your-own-adventure engine with real-time image generation, dynamic inventory tracking, and evolving quests.",
+  "requestFramePermissions": []
+}
