@@ -1,8 +1,10 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { AIResponse, ImageSize, Language } from "../types";
+import { AIResponse, ImageSize, Language, AIProvider } from "../types";
 
-const STORY_MODEL = "gemini-3-pro-preview";
-const IMAGE_MODEL = "gemini-3-pro-image-preview";
+const GEMINI_STORY_MODEL = "gemini-3-pro-preview";
+const GEMINI_IMAGE_MODEL = "gemini-3-pro-image-preview";
+const MISTRAL_MODEL = "mistral-large-latest";
+const MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions";
 
 // Define the schema for the structured JSON response
 const responseSchema: Schema = {
@@ -79,17 +81,91 @@ async function runWithRetry<T>(operation: () => Promise<T>, retries = 5, default
   }
 }
 
+// --- GEMINI IMPLEMENTATION ---
+
+const generateStoryGemini = async (
+  input: string,
+  history: { role: string; parts: { text: string }[] }[],
+  systemInstruction: string,
+): Promise<AIResponse> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  const responseText = await runWithRetry(async () => {
+    const chat = ai.chats.create({
+      model: GEMINI_STORY_MODEL,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      },
+      history: history,
+    });
+
+    const result = await chat.sendMessage({ message: input });
+    return result.text;
+  });
+
+  if (!responseText) throw new Error("No response from AI");
+  return JSON.parse(responseText) as AIResponse;
+};
+
+// --- MISTRAL IMPLEMENTATION ---
+
+const generateStoryMistral = async (
+  input: string,
+  history: { role: string; parts: { text: string }[] }[],
+  systemInstruction: string,
+  apiKey: string
+): Promise<AIResponse> => {
+  
+  // Convert Gemini history format to Mistral/OpenAI format
+  const messages = [
+    { role: "system", content: systemInstruction + `\n\nIMPORTANT: You must output a valid JSON object matching this schema: ${JSON.stringify(responseSchema)}` },
+    ...history.map(h => ({ role: h.role === 'model' ? 'assistant' : 'user', content: h.parts[0].text })),
+    { role: "user", content: input }
+  ];
+
+  const responseData = await runWithRetry(async () => {
+    const res = await fetch(MISTRAL_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: MISTRAL_MODEL,
+        messages: messages,
+        response_format: { type: "json_object" },
+        temperature: 0.7
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(`Mistral API Error: ${res.status} - ${JSON.stringify(err)}`);
+    }
+
+    return await res.json();
+  });
+
+  const content = responseData.choices[0]?.message?.content;
+  if (!content) throw new Error("Empty response from Mistral");
+  
+  return JSON.parse(content) as AIResponse;
+};
+
+// --- MAIN EXPORT ---
+
 export const generateStorySegment = async (
   input: string,
   history: { role: string; parts: { text: string }[] }[],
   currentInventory: string[],
   currentQuest: string,
-  language: Language
+  language: Language,
+  provider: AIProvider = 'gemini',
+  mistralKey?: string
 ): Promise<AIResponse> => {
   try {
-    // Initialize Gemini Client inside the function to use the latest API key
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
     const langInstruction = language === 'ru' 
       ? "OUTPUT RULE: The 'narrative', 'inventory', 'currentQuest', 'locationName', and 'suggestedActions' properties MUST be in Russian. The 'visualDescription' MUST be in English."
       : "OUTPUT RULE: All content must be in English.";
@@ -110,25 +186,13 @@ export const generateStorySegment = async (
       9.  ${langInstruction}
     `;
 
-    // Wrap the chat creation and message sending in the retry logic
-    const responseText = await runWithRetry(async () => {
-        const chat = ai.chats.create({
-            model: STORY_MODEL,
-            config: {
-                systemInstruction,
-                responseMimeType: "application/json",
-                responseSchema: responseSchema,
-            },
-            history: history,
-        });
+    if (provider === 'mistral') {
+      if (!mistralKey) throw new Error("Mistral API Key is required.");
+      return await generateStoryMistral(input, history, systemInstruction, mistralKey);
+    } else {
+      return await generateStoryGemini(input, history, systemInstruction);
+    }
 
-        const result = await chat.sendMessage({ message: input });
-        return result.text;
-    });
-    
-    if (!responseText) throw new Error("No response from AI");
-
-    return JSON.parse(responseText) as AIResponse;
   } catch (error) {
     console.error("Story Generation Error:", error);
     throw error;
@@ -140,7 +204,8 @@ export const generateSceneImage = async (
   size: ImageSize
 ): Promise<string | undefined> => {
   try {
-    // Initialize Gemini Client inside the function to use the latest API key
+    // We always use Gemini for images for now, as it's the integrated multimodal provider.
+    // If the user uses Mistral for text, we still rely on the env API_KEY for Gemini images.
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     // Enforce consistent art style
@@ -168,9 +233,8 @@ export const generateSceneImage = async (
     try {
         // Attempt 1: Try High Quality Model
         return await runWithRetry(async () => {
-            return await generateImageCall(IMAGE_MODEL, {
+            return await generateImageCall(GEMINI_IMAGE_MODEL, {
                 imageConfig: {
-                    // gemini-3-pro-image-preview supports these sizes
                     imageSize: size, 
                     aspectRatio: "16:9" 
                 }
@@ -184,7 +248,6 @@ export const generateSceneImage = async (
             console.warn("403 Permission Denied on High-Res Model. Falling back to Standard Model.");
             
             // Attempt 2: Fallback to Standard Model (gemini-2.5-flash-image)
-            // Note: Does not support imageSize, but supports aspectRatio
             return await runWithRetry(async () => {
                 return await generateImageCall("gemini-2.5-flash-image", {
                     imageConfig: {
@@ -193,8 +256,6 @@ export const generateSceneImage = async (
                 });
             });
         }
-        
-        // Retrow other errors to be caught by outer catch
         throw error;
     }
     

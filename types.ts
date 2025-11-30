@@ -6,6 +6,7 @@ export interface GameState {
   gameStarted: boolean;
   character?: Character;
   locationHistory: string[];
+  suggestedActions?: string[];
 }
 
 export interface Character {
@@ -40,6 +41,11 @@ export enum ImageSize {
 
 export type Language = 'en' | 'ru';
 
+export type AIProvider = 'gemini' | 'mistral';
+
 export interface GameSettings {
   imageSize: ImageSize;
+  language: Language;
+  provider: AIProvider;
+  mistralKey?: string;
 }

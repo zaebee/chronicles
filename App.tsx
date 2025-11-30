@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Settings, Loader2, Sparkles, Image as ImageIcon, Bot, Globe, Compass, Backpack, X, Shield, Sword, Wand, Feather, User, AlertTriangle, Menu, Save, History } from 'lucide-react';
+import { Send, Settings, Loader2, Sparkles, Image as ImageIcon, Bot, Globe, Compass, Backpack, X, Shield, Sword, Wand, Feather, User, AlertTriangle, Menu, Save, History, Cpu, Key as KeyIcon } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { StoryCard } from './components/StoryCard';
 import { generateStorySegment, generateSceneImage } from './services/geminiService';
-import { GameState, StoryTurn, ImageSize, Language, Character } from './types';
+import { GameState, StoryTurn, ImageSize, Language, Character, AIProvider } from './types';
 
 const SAVE_KEY = 'chronicle_save_v1';
+const SETTINGS_KEY = 'chronicle_settings_v1';
 
 // Translation Dictionary
 const CONTENT = {
@@ -21,6 +22,9 @@ const CONTENT = {
     settingsTitle: "Settings",
     imageResTitle: "Image Resolution",
     langTitle: "Language",
+    providerTitle: "Story Engine",
+    mistralKeyLabel: "Mistral API Key",
+    mistralKeyPlaceholder: "Enter your Mistral API Key",
     inputPlaceholder: "What do you want to do?",
     startPrompt: "Start a new fantasy adventure. Describe the setting where I wake up. Give me a starting quest.",
     questLabel: "Current Quest",
@@ -29,7 +33,7 @@ const CONTENT = {
     mapLabel: "Map",
     emptyInventory: "Your pack is empty.",
     awaitingQuest: "Awaiting adventure...",
-    engineVersion: "Chronicle Engine v1.0",
+    engineVersion: "Chronicle Engine v1.1",
     errorKey: "Failed to start game. Please check your API Key.",
     errorGen: "Something went wrong. The spirits are silent.",
     rateLimit: "The spirits are exhausted (API Limit Reached). Please wait a moment before trying again.",
@@ -67,6 +71,9 @@ const CONTENT = {
     settingsTitle: "Настройки",
     imageResTitle: "Разрешение изображения",
     langTitle: "Язык",
+    providerTitle: "Игровой Движок",
+    mistralKeyLabel: "API Ключ Mistral",
+    mistralKeyPlaceholder: "Введите ключ Mistral API",
     inputPlaceholder: "Что вы хотите сделать?",
     startPrompt: "Начни новое фэнтези приключение. Опиши место, где я просыпаюсь. Дай мне стартовый квест.",
     questLabel: "Текущий квест",
@@ -75,7 +82,7 @@ const CONTENT = {
     mapLabel: "Карта",
     emptyInventory: "Рюкзак пуст.",
     awaitingQuest: "В ожидании приключений...",
-    engineVersion: "Движок Chronicle v1.0",
+    engineVersion: "Движок Chronicle v1.1",
     errorKey: "Не удалось начать игру. Проверьте ваш API ключ.",
     errorGen: "Что-то пошло не так. Духи молчат.",
     rateLimit: "Духи истощены (Лимит API). Пожалуйста, подождите немного перед повторной попыткой.",
@@ -125,13 +132,18 @@ const CLASSES = [
 export default function App() {
   const [gameState, setGameState] = useState<GameState>(INITIAL_STATE);
   const [viewState, setViewState] = useState<ViewState>('welcome');
-  const [language, setLanguage] = useState<Language>('en');
   const [input, setInput] = useState('');
   const [suggestedActions, setSuggestedActions] = useState<string[]>(CONTENT.en.initialActions);
-  const [imageSize, setImageSize] = useState<ImageSize>(ImageSize.Size_1K);
   const [showSettings, setShowSettings] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Settings State
+  const [language, setLanguage] = useState<Language>('en');
+  const [imageSize, setImageSize] = useState<ImageSize>(ImageSize.Size_1K);
+  const [provider, setProvider] = useState<AIProvider>('gemini');
+  const [mistralKey, setMistralKey] = useState('');
+
   const [showTutorial, setShowTutorial] = useState(() => {
     if (typeof window !== 'undefined') {
       return !localStorage.getItem('chronicle_tutorial_seen');
@@ -159,6 +171,30 @@ export default function App() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [gameState.history, gameState.isGenerating, error]);
+
+  // Load Settings
+  useEffect(() => {
+    const savedSettings = localStorage.getItem(SETTINGS_KEY);
+    if (savedSettings) {
+      try {
+        const parsed = JSON.parse(savedSettings);
+        if (parsed.language) setLanguage(parsed.language);
+        if (parsed.imageSize) setImageSize(parsed.imageSize);
+        if (parsed.provider) setProvider(parsed.provider);
+        if (parsed.mistralKey) setMistralKey(parsed.mistralKey);
+      } catch (e) { console.error(e); }
+    }
+  }, []);
+
+  // Save Settings
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      language,
+      imageSize,
+      provider,
+      mistralKey
+    }));
+  }, [language, imageSize, provider, mistralKey]);
 
   // Check for save on mount
   useEffect(() => {
@@ -217,7 +253,6 @@ export default function App() {
   const updateLocations = (history: string[], newLocation: string): string[] => {
     if (!newLocation) return history;
     const lastLocation = history[history.length - 1];
-    // Simple string normalization to avoid duplicate "Forest" vs "Forest " entries
     if (lastLocation && lastLocation.trim().toLowerCase() === newLocation.trim().toLowerCase()) {
       return history;
     }
@@ -230,22 +265,27 @@ export default function App() {
     if (msg.includes('429') || msg.includes('Quota') || msg.includes('RESOURCE_EXHAUSTED')) {
       return t.rateLimit;
     }
-    return t.errorGen;
+    return msg.length < 100 ? msg : t.errorGen;
   };
 
   const startGame = useCallback(async () => {
     setError(null);
-    // API Key Selection for Gemini 3 Pro Image Preview
+    
+    // Check keys
+    if (provider === 'mistral' && !mistralKey) {
+      setError("Please enter your Mistral API Key in Settings");
+      setShowSettings(true);
+      return;
+    }
+
     const w = window as any;
-    if (w.aistudio) {
+    if (w.aistudio && provider === 'gemini') {
       try {
         const hasKey = await w.aistudio.hasSelectedApiKey();
         if (!hasKey) {
           await w.aistudio.openSelectKey();
         }
-      } catch (e) {
-        console.error("API Key selection error:", e);
-      }
+      } catch (e) { console.error("API Key selection error:", e); }
     }
 
     const t = CONTENT[language];
@@ -264,7 +304,6 @@ export default function App() {
     setViewState('game');
     
     try {
-      // Construct the prompt with character details
       const basePrompt = t.startPrompt;
       const charDetails = language === 'ru' 
         ? `Меня зовут ${character.name}, я ${character.class}. Моя внешность: ${character.appearance || "обычная"}.`
@@ -272,7 +311,7 @@ export default function App() {
       
       const fullPrompt = `${basePrompt} ${charDetails}`;
       
-      const aiResponse = await generateStorySegment(fullPrompt, [], [], "", language);
+      const aiResponse = await generateStorySegment(fullPrompt, [], [], "", language, provider, mistralKey);
       const imageUrl = await generateSceneImage(aiResponse.visualDescription, imageSize);
 
       const newTurn: StoryTurn = {
@@ -297,9 +336,9 @@ export default function App() {
       console.error(error);
       setGameState(prev => ({ ...prev, isGenerating: false, gameStarted: false }));
       setViewState('welcome');
-      alert(t.errorKey); 
+      setError(getErrorMessage(error, t));
     }
-  }, [imageSize, language, charName, charClass, charDesc]);
+  }, [imageSize, language, charName, charClass, charDesc, provider, mistralKey]);
 
   const handleAction = async (actionText: string) => {
     if (!actionText.trim() || gameState.isGenerating) return;
@@ -334,7 +373,9 @@ export default function App() {
         apiHistory.slice(0, -1),
         gameState.inventory, 
         gameState.currentQuest,
-        language
+        language,
+        provider,
+        mistralKey
       );
 
       const imageUrl = await generateSceneImage(aiResponse.visualDescription, imageSize);
@@ -386,11 +427,97 @@ export default function App() {
         <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2544&auto=format&fit=crop')] bg-cover bg-center opacity-20"></div>
         <div className="absolute inset-0 bg-gradient-to-t from-neutral-900 via-neutral-900/80 to-transparent"></div>
 
-        {/* Language Selector */}
-        <div className="absolute top-4 right-4 z-20 flex gap-2">
-            <button onClick={() => setLanguage('en')} className={`px-3 py-1 rounded text-sm ${language === 'en' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>English</button>
-            <button onClick={() => setLanguage('ru')} className={`px-3 py-1 rounded text-sm ${language === 'ru' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Русский</button>
-        </div>
+        {/* Settings Button on Welcome Screen */}
+        <button 
+          onClick={() => setShowSettings(true)}
+          className="absolute top-4 right-4 z-20 text-zinc-400 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition-colors"
+        >
+            <Settings size={24} />
+        </button>
+
+        {/* Settings Modal (Global) */}
+        {showSettings && (
+             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+                 <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+                    <button onClick={() => setShowSettings(false)} className="absolute top-4 right-4 text-zinc-500 hover:text-white">
+                        <X size={20} />
+                    </button>
+                    <h2 className="text-xl font-bold text-zinc-100 mb-6 flex items-center gap-2">
+                        <Settings size={20} /> {t.settingsTitle}
+                    </h2>
+
+                    <div className="space-y-6">
+                        {/* Provider Selection */}
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+                                <Cpu size={14} /> {t.providerTitle}
+                            </label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button 
+                                    onClick={() => setProvider('gemini')}
+                                    className={`p-3 rounded-lg border text-sm font-bold transition-all ${provider === 'gemini' ? 'bg-amber-600/20 border-amber-500 text-amber-500' : 'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}
+                                >
+                                    Google Gemini
+                                </button>
+                                <button 
+                                    onClick={() => setProvider('mistral')}
+                                    className={`p-3 rounded-lg border text-sm font-bold transition-all ${provider === 'mistral' ? 'bg-indigo-600/20 border-indigo-500 text-indigo-400' : 'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}
+                                >
+                                    Mistral AI
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Mistral Key Input */}
+                        {provider === 'mistral' && (
+                             <div className="space-y-2 animate-in slide-in-from-top-2">
+                                <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+                                    <KeyIcon size={14} /> {t.mistralKeyLabel}
+                                </label>
+                                <input 
+                                    type="password" 
+                                    value={mistralKey}
+                                    onChange={(e) => setMistralKey(e.target.value)}
+                                    placeholder={t.mistralKeyPlaceholder}
+                                    className="w-full bg-black/40 border border-zinc-700 rounded-lg p-3 text-zinc-100 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                />
+                             </div>
+                        )}
+
+                        <hr className="border-zinc-800" />
+
+                        {/* Language */}
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+                                <Globe size={14} /> {t.langTitle}
+                            </label>
+                            <div className="flex bg-zinc-950 rounded-lg p-1">
+                                <button onClick={() => setLanguage('en')} className={`flex-1 text-xs font-medium py-2 rounded-md transition-colors ${language === 'en' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}>English</button>
+                                <button onClick={() => setLanguage('ru')} className={`flex-1 text-xs font-medium py-2 rounded-md transition-colors ${language === 'ru' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}>Русский</button>
+                            </div>
+                        </div>
+
+                         {/* Image Resolution */}
+                         <div className="space-y-2">
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+                                <ImageIcon size={14} /> {t.imageResTitle}
+                            </label>
+                            <div className="flex bg-zinc-950 rounded-lg p-1">
+                                {Object.values(ImageSize).map(size => (
+                                     <button 
+                                        key={size}
+                                        onClick={() => setImageSize(size)} 
+                                        className={`flex-1 text-xs font-medium py-2 rounded-md transition-colors ${imageSize === size ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}
+                                     >
+                                         {size}
+                                     </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                 </div>
+             </div>
+        )}
 
         {/* Tutorial Modal */}
         {showTutorial && (
@@ -432,6 +559,16 @@ export default function App() {
             </div>
           </div>
         )}
+        
+        {/* Error Display */}
+        {error && (
+            <div className="absolute top-20 left-0 right-0 z-50 flex justify-center px-4 animate-in fade-in slide-in-from-top-2">
+                 <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-3 flex items-center gap-3 shadow-lg backdrop-blur-md max-w-md">
+                    <AlertTriangle className="text-red-500 shrink-0" size={18} />
+                    <p className="text-red-200 text-sm font-medium">{error}</p>
+                 </div>
+            </div>
+        )}
 
         <div className="relative z-10 max-w-lg w-full text-center space-y-8 animate-fade-in-up">
           <div className="inline-block p-4 rounded-full bg-amber-500/10 border border-amber-500/30 mb-4">
@@ -443,26 +580,6 @@ export default function App() {
           <p className="text-xl text-neutral-400 font-light">
             {t.startSubtitle}
           </p>
-
-           {/* Image Quality Settings */}
-           <div className="flex flex-col items-center gap-2 py-4">
-             <div className="bg-black/40 backdrop-blur-sm p-1 rounded-lg flex border border-white/10">
-               {Object.values(ImageSize).map((size) => (
-                 <button
-                   key={size}
-                   onClick={() => setImageSize(size)}
-                   className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                     imageSize === size 
-                       ? 'bg-amber-600 text-white shadow-lg' 
-                       : 'text-zinc-400 hover:text-white hover:bg-white/5'
-                   }`}
-                 >
-                   {size}
-                 </button>
-               ))}
-             </div>
-             <p className="text-xs text-zinc-500">{t.selectRes}</p>
-           </div>
 
           <div className="flex flex-col md:flex-row gap-4 justify-center items-stretch">
             {/* Continue Button */}
@@ -486,6 +603,10 @@ export default function App() {
                 </span>
               <div className="absolute -inset-3 rounded-lg bg-amber-400 opacity-20 group-hover:opacity-40 blur transition duration-200"></div>
             </button>
+          </div>
+          
+          <div className="text-xs text-zinc-600 pt-8 uppercase tracking-widest">
+             Powered by {provider === 'gemini' ? 'Google Gemini' : 'Mistral AI'}
           </div>
         </div>
       </div>
@@ -620,24 +741,47 @@ export default function App() {
           </div>
         </header>
 
-        {/* Settings Popover */}
+        {/* Settings Popover (Game View) */}
         {showSettings && (
-          <div className="absolute top-16 right-6 z-30 w-72 bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl p-4 animate-in fade-in slide-in-from-top-2">
+          <div className="absolute top-16 right-6 z-30 w-80 bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl p-4 animate-in fade-in slide-in-from-top-2">
+            
+            {/* Provider Section */}
+            <h3 className="text-sm font-bold text-zinc-300 mb-3 flex items-center gap-2">
+              <Cpu size={16} /> {t.providerTitle}
+            </h3>
+            <div className="space-y-3 mb-4">
+                 <div className="flex bg-zinc-900/50 rounded-lg p-1">
+                    <button onClick={() => setProvider('gemini')} className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${provider === 'gemini' ? 'bg-amber-600 text-white shadow' : 'text-zinc-400 hover:text-white'}`}>Gemini</button>
+                    <button onClick={() => setProvider('mistral')} className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${provider === 'mistral' ? 'bg-indigo-600 text-white shadow' : 'text-zinc-400 hover:text-white'}`}>Mistral</button>
+                 </div>
+                 {provider === 'mistral' && (
+                     <input 
+                        type="password" 
+                        value={mistralKey}
+                        onChange={(e) => setMistralKey(e.target.value)}
+                        placeholder="Mistral API Key"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-xs text-white focus:border-indigo-500 outline-none"
+                     />
+                 )}
+            </div>
+
+            <hr className="border-zinc-700/50 mb-4" />
+
             <h3 className="text-sm font-bold text-zinc-300 mb-3 flex items-center gap-2">
               <Globe size={16} /> {t.langTitle}
             </h3>
              <div className="flex bg-zinc-900/50 rounded-lg p-1 mb-4">
               <button 
                 onClick={() => setLanguage('en')}
-                className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${language === 'en' ? 'bg-amber-600 text-white shadow' : 'text-zinc-400 hover:text-white'}`}
+                className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${language === 'en' ? 'bg-zinc-700 text-white shadow' : 'text-zinc-400 hover:text-white'}`}
               >
-                English
+                EN
               </button>
               <button 
                 onClick={() => setLanguage('ru')}
-                className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${language === 'ru' ? 'bg-amber-600 text-white shadow' : 'text-zinc-400 hover:text-white'}`}
+                className={`flex-1 text-xs font-medium py-1.5 rounded-md transition-colors ${language === 'ru' ? 'bg-zinc-700 text-white shadow' : 'text-zinc-400 hover:text-white'}`}
               >
-                Русский
+                RU
               </button>
             </div>
 
