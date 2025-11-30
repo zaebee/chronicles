@@ -147,31 +147,57 @@ export const generateSceneImage = async (
     const stylePrefix = "Digital fantasy art, oil painting style, highly detailed, dramatic lighting, cinematic composition. ";
     const prompt = stylePrefix + visualDescription;
 
-    const imageUrl = await runWithRetry(async () => {
+    // Helper to abstract the generation call for reuse
+    const generateImageCall = async (model: string, config: any) => {
         const response = await ai.models.generateContent({
-            model: IMAGE_MODEL,
+            model: model,
             contents: {
                 parts: [{ text: prompt }],
             },
-            config: {
-                imageConfig: {
-                    // gemini-3-pro-image-preview supports these sizes
-                    imageSize: size, 
-                    aspectRatio: "16:9" 
-                }
-            },
+            config: config,
         });
 
-        // Extract image
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) {
                 return `data:image/png;base64,${part.inlineData.data}`;
             }
         }
         return undefined;
-    });
+    };
+
+    try {
+        // Attempt 1: Try High Quality Model
+        return await runWithRetry(async () => {
+            return await generateImageCall(IMAGE_MODEL, {
+                imageConfig: {
+                    // gemini-3-pro-image-preview supports these sizes
+                    imageSize: size, 
+                    aspectRatio: "16:9" 
+                }
+            });
+        });
+    } catch (error: any) {
+        // Check specifically for 403 Permission Denied
+        const isPermissionError = error.status === 403 || error.code === 403 || (error.message && error.message.includes('403'));
+        
+        if (isPermissionError) {
+            console.warn("403 Permission Denied on High-Res Model. Falling back to Standard Model.");
+            
+            // Attempt 2: Fallback to Standard Model (gemini-2.5-flash-image)
+            // Note: Does not support imageSize, but supports aspectRatio
+            return await runWithRetry(async () => {
+                return await generateImageCall("gemini-2.5-flash-image", {
+                    imageConfig: {
+                         aspectRatio: "16:9" 
+                    }
+                });
+            });
+        }
+        
+        // Retrow other errors to be caught by outer catch
+        throw error;
+    }
     
-    return imageUrl;
   } catch (error) {
     console.error("Image Generation Error:", error);
     // Return undefined on error so the story can continue even if image fails

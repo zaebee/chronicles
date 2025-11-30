@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Settings, Loader2, Sparkles, Image as ImageIcon, Bot, Globe, Compass, Backpack, X, Shield, Sword, Wand, Feather, User, AlertTriangle, Menu } from 'lucide-react';
+import { Send, Settings, Loader2, Sparkles, Image as ImageIcon, Bot, Globe, Compass, Backpack, X, Shield, Sword, Wand, Feather, User, AlertTriangle, Menu, Save, History } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { StoryCard } from './components/StoryCard';
 import { generateStorySegment, generateSceneImage } from './services/geminiService';
 import { GameState, StoryTurn, ImageSize, Language, Character } from './types';
+
+const SAVE_KEY = 'chronicle_save_v1';
 
 // Translation Dictionary
 const CONTENT = {
@@ -12,6 +14,7 @@ const CONTENT = {
     startSubtitle: "An Infinite Choose-Your-Own-Adventure Engine",
     selectRes: "Select Image Resolution (Gemini Pro Image)",
     beginBtn: "Create Character",
+    continueBtn: "Continue Journey",
     embarkBtn: "Embark",
     loading: "Summoning World...",
     headerTitle: "CHRONICLE",
@@ -30,6 +33,7 @@ const CONTENT = {
     errorKey: "Failed to start game. Please check your API Key.",
     errorGen: "Something went wrong. The spirits are silent.",
     rateLimit: "The spirits are exhausted (API Limit Reached). Please wait a moment before trying again.",
+    saving: "Saving...",
     initialActions: ["Look around", "Check inventory", "Yell for help"],
     // Tutorial
     tutorialTitle: "How to Play",
@@ -56,6 +60,7 @@ const CONTENT = {
     startSubtitle: "Бесконечное интерактивное приключение",
     selectRes: "Выберите разрешение (Gemini Pro Image)",
     beginBtn: "Создать персонажа",
+    continueBtn: "Продолжить путь",
     embarkBtn: "Начать путь",
     loading: "Создание мира...",
     headerTitle: "ХРОНИКИ",
@@ -74,6 +79,7 @@ const CONTENT = {
     errorKey: "Не удалось начать игру. Проверьте ваш API ключ.",
     errorGen: "Что-то пошло не так. Духи молчат.",
     rateLimit: "Духи истощены (Лимит API). Пожалуйста, подождите немного перед повторной попыткой.",
+    saving: "Сохранение...",
     initialActions: ["Осмотреться", "Проверить инвентарь", "Позвать на помощь"],
     // Tutorial
     tutorialTitle: "Как играть",
@@ -132,6 +138,10 @@ export default function App() {
     }
     return false;
   });
+  
+  // Autosave State
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasSave, setHasSave] = useState(false);
 
   // Character Creation State
   const [charName, setCharName] = useState('');
@@ -150,9 +160,53 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [gameState.history, gameState.isGenerating, error]);
 
+  // Check for save on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(SAVE_KEY);
+    if (saved) {
+      setHasSave(true);
+    }
+  }, []);
+
+  // Autosave Effect
+  useEffect(() => {
+    if (gameState.gameStarted && !gameState.isGenerating && gameState.history.length > 0) {
+      const saveData = {
+        gameState,
+        suggestedActions,
+        timestamp: Date.now()
+      };
+      
+      localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
+      
+      // Visual feedback
+      setIsSaving(true);
+      setHasSave(true);
+      const timer = setTimeout(() => setIsSaving(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [gameState, suggestedActions]);
+
   const closeTutorial = () => {
     setShowTutorial(false);
     localStorage.setItem('chronicle_tutorial_seen', 'true');
+  };
+
+  const loadGame = () => {
+    try {
+      const saved = localStorage.getItem(SAVE_KEY);
+      if (saved) {
+        const data = JSON.parse(saved);
+        if (data.gameState && data.suggestedActions) {
+           setGameState(data.gameState);
+           setSuggestedActions(data.suggestedActions);
+           setViewState('game');
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load save:", e);
+      alert("Corrupted save file found.");
+    }
   };
 
   const handleCreateClick = () => {
@@ -242,12 +296,8 @@ export default function App() {
     } catch (error) {
       console.error(error);
       setGameState(prev => ({ ...prev, isGenerating: false, gameStarted: false }));
-      // We do not reset viewState to welcome here, allowing user to retry from creation screen if they wish, 
-      // or we can handle it. But standard behavior is to show error in UI.
-      // However, if we are in 'game' view without history, it looks broken. 
-      // Let's reset to welcome if it failed on the very first turn.
       setViewState('welcome');
-      alert(t.errorKey); // Keep alert for API key start error as UI isn't fully mounted
+      alert(t.errorKey); 
     }
   }, [imageSize, language, charName, charClass, charDesc]);
 
@@ -414,15 +464,29 @@ export default function App() {
              <p className="text-xs text-zinc-500">{t.selectRes}</p>
            </div>
 
-          <button
-            onClick={handleCreateClick}
-            className="group relative inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-white transition-all duration-200 bg-amber-600 font-serif rounded-lg hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-600"
-          >
-              <span className="flex items-center gap-2">
-                {t.beginBtn} <User size={20} className="group-hover:translate-x-1 transition-transform" />
-              </span>
-            <div className="absolute -inset-3 rounded-lg bg-amber-400 opacity-20 group-hover:opacity-40 blur transition duration-200"></div>
-          </button>
+          <div className="flex flex-col md:flex-row gap-4 justify-center items-stretch">
+            {/* Continue Button */}
+            {hasSave && (
+               <button
+                  onClick={loadGame}
+                  className="group relative inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-zinc-100 transition-all duration-200 bg-zinc-800 font-serif rounded-lg hover:bg-zinc-700 border border-zinc-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-zinc-600"
+               >
+                 <span className="flex items-center gap-2">
+                   <History size={20} className="text-amber-500" /> {t.continueBtn}
+                 </span>
+               </button>
+            )}
+
+            <button
+              onClick={handleCreateClick}
+              className="group relative inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-white transition-all duration-200 bg-amber-600 font-serif rounded-lg hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-600"
+            >
+                <span className="flex items-center gap-2">
+                  {t.beginBtn} <User size={20} className="group-hover:translate-x-1 transition-transform" />
+                </span>
+              <div className="absolute -inset-3 rounded-lg bg-amber-400 opacity-20 group-hover:opacity-40 blur transition duration-200"></div>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -624,6 +688,12 @@ export default function App() {
             )}
             <div ref={bottomRef} />
           </div>
+        </div>
+        
+        {/* Autosave Indicator */}
+        <div className={`fixed bottom-4 right-4 z-40 bg-zinc-900/80 backdrop-blur border border-amber-900/50 px-3 py-1.5 rounded-full flex items-center gap-2 transition-opacity duration-500 pointer-events-none ${isSaving ? 'opacity-100' : 'opacity-0'}`}>
+           <Save size={14} className="text-amber-500 animate-pulse" />
+           <span className="text-xs text-amber-500 font-medium tracking-wide">{t.saving}</span>
         </div>
 
         {/* Input Area */}
