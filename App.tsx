@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Settings, Loader2, Sparkles, Image as ImageIcon, Bot, Globe, Compass, Backpack, X, Shield, Sword, Wand, Feather, User, AlertTriangle, Menu, Save, History, Cpu, Key as KeyIcon } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
@@ -31,6 +32,7 @@ const CONTENT = {
     inventoryLabel: "Inventory",
     journalLabel: "Journal",
     mapLabel: "Map",
+    peopleLabel: "People Nearby",
     emptyInventory: "Your pack is empty.",
     awaitingQuest: "Awaiting adventure...",
     engineVersion: "Chronicle Engine v1.1",
@@ -80,6 +82,7 @@ const CONTENT = {
     inventoryLabel: "Инвентарь",
     journalLabel: "Журнал",
     mapLabel: "Карта",
+    peopleLabel: "Люди рядом",
     emptyInventory: "Рюкзак пуст.",
     awaitingQuest: "В ожидании приключений...",
     engineVersion: "Движок Chronicle v1.1",
@@ -118,6 +121,7 @@ const INITIAL_STATE: GameState = {
   isGenerating: false,
   gameStarted: false,
   locationHistory: [],
+  activeCharacters: []
 };
 
 type ViewState = 'welcome' | 'create' | 'game';
@@ -329,6 +333,7 @@ export default function App() {
         inventory: aiResponse.inventory,
         currentQuest: aiResponse.currentQuest,
         locationHistory: updateLocations([], aiResponse.locationName),
+        activeCharacters: aiResponse.activeCharacters || [],
         isGenerating: false,
       }));
       setSuggestedActions(aiResponse.suggestedActions);
@@ -395,6 +400,7 @@ export default function App() {
         inventory: aiResponse.inventory,
         currentQuest: aiResponse.currentQuest,
         locationHistory: updateLocations(prev.locationHistory, aiResponse.locationName),
+        activeCharacters: aiResponse.activeCharacters || [],
         isGenerating: false,
       }));
       setSuggestedActions(aiResponse.suggestedActions);
@@ -416,6 +422,14 @@ export default function App() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInput(e.target.value);
     if (error) setError(null);
+  };
+  
+  const handleCharacterClick = (name: string) => {
+    const text = language === 'ru' ? `Спросить ${name} о ` : `Ask ${name} about `;
+    setInput(text);
+    // Focus input
+    const inputEl = document.querySelector('input[type="text"]') as HTMLInputElement;
+    if (inputEl) inputEl.focus();
   };
 
   const t = CONTENT[language];
@@ -899,11 +913,14 @@ export default function App() {
            inventory={gameState.inventory} 
            currentQuest={gameState.currentQuest}
            locationHistory={gameState.locationHistory}
+           activeCharacters={gameState.activeCharacters}
+           onCharacterClick={handleCharacterClick}
            labels={{
              journal: t.journalLabel,
              quest: t.questLabel,
              inventory: t.inventoryLabel,
              map: t.mapLabel,
+             people: t.peopleLabel,
              empty: t.emptyInventory,
              awaiting: t.awaitingQuest,
              version: t.engineVersion
@@ -932,11 +949,17 @@ export default function App() {
                   inventory={gameState.inventory} 
                   currentQuest={gameState.currentQuest}
                   locationHistory={gameState.locationHistory}
+                  activeCharacters={gameState.activeCharacters}
+                  onCharacterClick={(name) => {
+                     handleCharacterClick(name);
+                     setShowMobileMenu(false);
+                  }}
                   labels={{
                     journal: t.journalLabel,
                     quest: t.questLabel,
                     inventory: t.inventoryLabel,
                     map: t.mapLabel,
+                    people: t.peopleLabel,
                     empty: t.emptyInventory,
                     awaiting: t.awaitingQuest,
                     version: t.engineVersion

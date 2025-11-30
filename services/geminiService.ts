@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { AIResponse, ImageSize, Language, AIProvider } from "../types";
 
@@ -12,7 +13,7 @@ const responseSchema: Schema = {
   properties: {
     narrative: {
       type: Type.STRING,
-      description: "The next segment of the story. Engaging, descriptive, and reactive to user choice.",
+      description: "The next segment of the story. Engaging, descriptive, and reactive to user choice. If the user talks to an NPC, write the dialogue.",
     },
     visualDescription: {
       type: Type.STRING,
@@ -31,13 +32,25 @@ const responseSchema: Schema = {
       type: Type.STRING,
       description: "The specific name of the player's current location (e.g., 'The Rusty Anchor Inn', 'Darkwood Forest', 'King's Throne Room').",
     },
+    activeCharacters: {
+      type: Type.ARRAY,
+      items: { 
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          description: { type: Type.STRING, description: "Short role or visual trait (e.g. 'Innkeeper', 'Tall and scars')." }
+        },
+        required: ["name", "description"]
+      },
+      description: "List of NPCs currently present in the scene who can be talked to. Update as characters enter or leave.",
+    },
     suggestedActions: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: "3 short, punchy suggested actions the user might take.",
+      description: "3 short, punchy suggested actions the user might take. If NPCs are present, include a dialogue option.",
     },
   },
-  required: ["narrative", "visualDescription", "inventory", "currentQuest", "locationName", "suggestedActions"],
+  required: ["narrative", "visualDescription", "inventory", "currentQuest", "locationName", "activeCharacters", "suggestedActions"],
 };
 
 // Helper function for delays
@@ -167,7 +180,7 @@ export const generateStorySegment = async (
 ): Promise<AIResponse> => {
   try {
     const langInstruction = language === 'ru' 
-      ? "OUTPUT RULE: The 'narrative', 'inventory', 'currentQuest', 'locationName', and 'suggestedActions' properties MUST be in Russian. The 'visualDescription' MUST be in English."
+      ? "OUTPUT RULE: The 'narrative', 'inventory', 'currentQuest', 'locationName', 'activeCharacters', and 'suggestedActions' properties MUST be in Russian. The 'visualDescription' MUST be in English."
       : "OUTPUT RULE: All content must be in English.";
 
     const systemInstruction = `
@@ -176,14 +189,16 @@ export const generateStorySegment = async (
       
       RULES:
       1.  Output valid JSON matching the schema.
-      2.  Track the 'inventory' and 'currentQuest' meticulously. If the user picks up an item, add it. If they use/lose it, remove it. Update the quest as the plot evolves.
-      3.  Keep the 'narrative' engaging, roughly 100-200 words per turn.
-      4.  The 'visualDescription' must be suitable for an art generator. Focus on the physical scene and the protagonist (if present).
-      5.  Track the 'locationName'. Update it whenever the player moves to a distinct new area.
-      6.  Current Inventory: ${JSON.stringify(currentInventory)}.
-      7.  Current Quest: "${currentQuest}".
-      8.  If this is the first turn, propose a starting quest, location, and empty inventory (or basic starter gear).
-      9.  ${langInstruction}
+      2.  Track the 'inventory' and 'currentQuest' meticulously.
+      3.  Track 'activeCharacters' (NPCs) currently in the scene. If a character enters, add them. If they leave or die, remove them.
+      4.  NPC INTERACTION: If the user asks an NPC a question (e.g. "Ask [Name] about [Topic]"), write a direct dialogue response. Ensure the NPC's response reflects their specific knowledge, personality, and relationship to the player.
+      5.  Keep the 'narrative' engaging, roughly 100-200 words per turn.
+      6.  The 'visualDescription' must be suitable for an art generator. Focus on the physical scene and the protagonist (if present).
+      7.  Track the 'locationName'. Update it whenever the player moves to a distinct new area.
+      8.  Current Inventory: ${JSON.stringify(currentInventory)}.
+      9.  Current Quest: "${currentQuest}".
+      10. If this is the first turn, propose a starting quest, location, and empty inventory (or basic starter gear).
+      11. ${langInstruction}
     `;
 
     if (provider === 'mistral') {

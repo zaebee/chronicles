@@ -1,10 +1,13 @@
+
 import React, { useMemo } from 'react';
-import { Backpack, Map as MapIcon, Scroll, MapPin, Flag, Navigation, Mountain, TreePine, Home, Landmark, Tent, Waves, Compass } from 'lucide-react';
+import { Backpack, Map as MapIcon, Scroll, MapPin, Flag, Navigation, Mountain, TreePine, Home, Landmark, Tent, Waves, Compass, Users, MessageCircle } from 'lucide-react';
+import { NPC } from '../types';
 
 interface SidebarProps {
   inventory: string[];
   currentQuest: string;
   locationHistory: string[];
+  activeCharacters?: NPC[];
   labels: {
     journal: string;
     quest: string;
@@ -13,7 +16,9 @@ interface SidebarProps {
     awaiting: string;
     version: string;
     map: string;
+    people: string;
   };
+  onCharacterClick?: (name: string) => void;
 }
 
 // Deterministic pseudo-random number generator for consistent map layout
@@ -47,7 +52,7 @@ const getMapIcon = (name: string, size: number = 14, className: string = "") => 
   return <MapPin {...props} />;
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({ inventory, currentQuest, locationHistory, labels }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ inventory, currentQuest, locationHistory, activeCharacters = [], labels, onCharacterClick }) => {
   
   // Generate map nodes
   const mapNodes = useMemo(() => {
@@ -126,6 +131,32 @@ export const Sidebar: React.FC<SidebarProps> = ({ inventory, currentQuest, locat
             </p>
           </div>
         </div>
+
+        {/* People/NPCs Section */}
+        {activeCharacters.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-xs uppercase tracking-widest text-zinc-500 font-bold flex items-center gap-2 px-1">
+              <Users size={14} /> {labels.people}
+            </h3>
+            <div className="grid grid-cols-1 gap-2">
+              {activeCharacters.map((npc, idx) => (
+                <button 
+                  key={idx}
+                  onClick={() => onCharacterClick && onCharacterClick(npc.name)}
+                  className="w-full flex items-start gap-3 p-3 bg-zinc-900 hover:bg-zinc-800 rounded-lg border border-zinc-800 hover:border-zinc-700 transition-all text-left group"
+                >
+                  <div className="w-8 h-8 rounded-full bg-zinc-950 flex items-center justify-center border border-zinc-800 group-hover:border-zinc-600 shrink-0">
+                    <MessageCircle size={14} className="text-zinc-500 group-hover:text-amber-500" />
+                  </div>
+                  <div>
+                    <span className="text-sm text-zinc-200 font-medium block">{npc.name}</span>
+                    <span className="text-xs text-zinc-500 block leading-tight">{npc.description}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Enhanced Visual Map Section */}
         <div className="relative bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden shadow-inner flex flex-col">

@@ -1,3 +1,4 @@
+
 export interface GameState {
   inventory: string[];
   currentQuest: string;
@@ -7,12 +8,18 @@ export interface GameState {
   character?: Character;
   locationHistory: string[];
   suggestedActions?: string[];
+  activeCharacters?: NPC[];
 }
 
 export interface Character {
   name: string;
   class: string;
   appearance: string;
+}
+
+export interface NPC {
+  name: string;
+  description: string;
 }
 
 export interface StoryTurn {
@@ -31,6 +38,7 @@ export interface AIResponse {
   currentQuest: string;
   suggestedActions: string[];
   locationName: string;
+  activeCharacters: NPC[];
 }
 
 export enum ImageSize {
